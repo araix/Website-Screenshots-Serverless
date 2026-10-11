@@ -1,4 +1,4 @@
-import chromium from "chrome-aws-lambda";
+import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import fs from "fs";
 import allowedDomains from "../../allowed-domains.js";
@@ -226,15 +226,32 @@ export default async function handler(req, res) {
 
   const isVercel = process.env.VERCEL === "1" || !!process.env.AWS_REGION;
 
-  // On Vercel / AWS Lambda, use chromium.executablePath; locally, find local Chrome
-  const executablePath = isVercel
-    ? await chromium.executablePath
-    : (getExecutablePath() || (await chromium.executablePath));
+  // On Vercel / AWS Lambda, inflate the bundled serverless Chromium build.
+  // Locally, prefer a system Chrome installation and only fall back to the
+  // serverless build when none is found.
+  const executablePath = process.env.CHROME_EXECUTABLE_PATH
+    ? process.env.CHROME_EXECUTABLE_PATH
+    : isVercel
+      ? await chromium.executablePath()
+      : getExecutablePath() || (await chromium.executablePath());
 
-  // Filter out flags like '--use-gl=swiftshader' that crash modern Chrome locally
+  // chromium.args targets a Lambda sandbox: --single-process and the
+  // swiftshader/headless-shell flags destabilize a regular desktop Chrome,
+  // so they are stripped only for local launches.
+  const serverlessOnlyArgs = [
+    "--single-process",
+    "--headless='shell'",
+    "--use-gl=angle",
+    "--use-angle=swiftshader",
+    "--enable-unsafe-swiftshader",
+  ];
   const args = isVercel
     ? chromium.args
-    : (chromium.args || []).filter((arg) => arg !== "--use-gl=swiftshader");
+    : chromium.args.filter((arg) => !serverlessOnlyArgs.includes(arg));
+
+  // The bundled serverless build is chrome-headless-shell, which Puppeteer must
+  // drive in "shell" headless mode; a desktop Chrome uses regular headless.
+  const headless = isVercel ? "shell" : true;
 
   const viewportWidth = parseInt(width, 10) || 1280;
   const viewportHeight = parseInt(height, 10) || 720;
@@ -242,20 +259,23 @@ export default async function handler(req, res) {
   let browser = null;
 
   try {
-    // NOTE: `chromium.puppeteer` is deliberately not used here. That getter
-    // requires chrome-aws-lambda/build/puppeteer/lib/* via a template-literal
-    // require, which build tracers (Next.js standalone / OpenNext) cannot
-    // resolve statically, so those files are missing from the deployment and
-    // the Lambda throws MODULE_NOT_FOUND. puppeteer-core is imported directly
-    // instead, which only needs chromium.executablePath and chromium.args.
+    // NOTE: puppeteer-core is launched directly against the executablePath
+    // provided by @sparticuz/chromium. Only chromium.executablePath() and
+    // chromium.args are used: chrome-aws-lambda's alternative
+    // (`chromium.puppeteer`, which requires
+    // `${__dirname}/puppeteer/lib/${overload}`) cannot be statically traced,
+    // so its vendored overloads are missing from serverless bundles.
     browser = await puppeteer.launch({
-      args,
+      // puppeteer.defaultArgs merges the Chromium flags with Puppeteer's own
+      // required ones (debug port, user data dir) and deduplicates headless
+      // flags, which is what @sparticuz/chromium documents.
+      args: await puppeteer.defaultArgs({ args, headless }),
       defaultViewport: {
         width: viewportWidth,
         height: viewportHeight,
       },
       executablePath,
-      headless: true,
+      headless,
       ignoreHTTPSErrors: true,
     });
 

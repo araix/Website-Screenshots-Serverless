@@ -105,10 +105,25 @@ ALLOWED_ORIGINS="https://mysite.com,https://app.example.com" pnpm dev
 pnpm dlx vercel
 ```
 
-### Note for Vercel Node 18+ Runtimes
+The API route runs Chromium through `@sparticuz/chromium` + `puppeteer-core`
+(the maintained successor to `chrome-aws-lambda`, which is archived and whose
+47 MB binary plus untraceable dynamic requires break serverless bundling).
 
-The `chrome-aws-lambda` package was built for Node 14/16. For newer runtimes, switch to its maintained successor:
+Deployment requirements:
 
-```bash
-pnpm add puppeteer-core @sparticuz/chromium
-```
+- **Node.js 22.17+** on Vercel (pinned via `package.json` `engines`; Vercel's
+  default is 24.x and 20.x is deprecated). The screenshot API returns HTTP 500
+  or fails at launch on older runtimes.
+- `next.config.js` keeps both packages external (`serverExternalPackages`) and
+  explicitly includes the Chromium archives (`outputFileTracingIncludes`),
+  because they are loaded through runtime-built paths that file tracing cannot
+  discover. Without this the function deploys but throws
+  `ENOENT .../bin/chromium.br` or `MODULE_NOT_FOUND` on first request.
+- The `/api` serverless function ships a ~70 MB Chromium archive, well within
+  Vercel's 250 MB uncompressed bundle limit. Screenshots of slow pages need up
+  to the 300 s Hobby default `maxDuration`, which is already sufficient.
+
+Locally the API uses a system Chrome installation (see
+[Local Development](#local-development)) and only falls back to the bundled
+Linux Chromium when none is found, so `pnpm dev` works on macOS without any
+extra setup.
