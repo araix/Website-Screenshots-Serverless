@@ -1,4 +1,5 @@
 import chromium from "chrome-aws-lambda";
+import puppeteer from "puppeteer-core";
 import fs from "fs";
 import allowedDomains from "../../allowed-domains.js";
 
@@ -241,7 +242,13 @@ export default async function handler(req, res) {
   let browser = null;
 
   try {
-    browser = await chromium.puppeteer.launch({
+    // NOTE: `chromium.puppeteer` is deliberately not used here. That getter
+    // requires chrome-aws-lambda/build/puppeteer/lib/* via a template-literal
+    // require, which build tracers (Next.js standalone / OpenNext) cannot
+    // resolve statically, so those files are missing from the deployment and
+    // the Lambda throws MODULE_NOT_FOUND. puppeteer-core is imported directly
+    // instead, which only needs chromium.executablePath and chromium.args.
+    browser = await puppeteer.launch({
       args,
       defaultViewport: {
         width: viewportWidth,
